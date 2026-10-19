@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # IA
     ai_provider: str = "gemini"  # gemini | openai_compat | none
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     openai_compat_api_key: str = ""
     openai_compat_base_url: str = "https://api.openai.com/v1"

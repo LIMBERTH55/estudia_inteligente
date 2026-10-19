@@ -146,27 +146,31 @@ def main() -> int:  # noqa: C901 - script lineal de verificación
     print(f"[OK] {len(questions)} preguntas generadas. Relevancia y motivos:")
     for q in questions:
         reason = f" — {q['relevance_reasons'][0]}" if q.get("relevance_reasons") else ""
-        refs = q.get("source_refs") or []
-        ref = refs[0].get("document") if refs and isinstance(refs[0], dict) else None
         print(f"    - [{q['qtype']}/{q['difficulty']}] rel {q['relevance']}/100{reason}")
-        if ref:
-            print(f"      fuente: {ref}")
+        refs = q.get("source_refs") or []
+        if refs and isinstance(refs[0], dict):
+            ref = refs[0]
+            where = ref.get("document_name") or "(sin documento)"
+            if ref.get("page"):
+                where += f", pág. {ref['page']}"
+            mark = "verificada" if ref.get("verified") else "SIN VERIFICAR"
+            print(f"      fuente: {where} ({mark})")
 
     # 9. Intento de examen: responder y entregar ------------------------------
     r = client.post(
-        "/api/exams",
+        "/api/attempts",
         json={"set_id": set_id, "title": "Examen de prueba (smoke test)", "mode": "exam"},
     )
     assert r.status_code == 201, f"Creación del examen falló: {r.status_code} {r.text}"
     attempt_id = r.json()["id"]
-    state = client.get(f"/api/exams/{attempt_id}").json()
+    state = client.get(f"/api/attempts/{attempt_id}").json()
     answered = 0
     for q in state["questions"]:
         shape = answer_for(q["qtype"])
         if shape is None:
             continue
         rr = client.patch(
-            f"/api/exams/{attempt_id}/answers/{q['id']}",
+            f"/api/attempts/{attempt_id}/answers/{q['id']}",
             json={"answer": shape, "flagged": False},
         )
         assert rr.status_code == 200, f"Guardar respuesta falló: {rr.status_code} {rr.text}"
@@ -174,19 +178,19 @@ def main() -> int:  # noqa: C901 - script lineal de verificación
     print(f"[OK] Examen iniciado y {answered}/{len(state['questions'])} preguntas respondidas")
 
     print("[…] Entregando y calificando (la corrección de desarrollo puede tardar)…")
-    r = client.post(f"/api/exams/{attempt_id}/finish")
+    r = client.post(f"/api/attempts/{attempt_id}/finish")
     assert r.status_code == 200, f"Entrega falló: {r.status_code} {r.text}"
     status = r.json()["status"]
     for _ in range(80):
         if status == "finished":
             break
         time.sleep(3)
-        status = client.get(f"/api/exams/{attempt_id}").json()["attempt"]["status"]
+        status = client.get(f"/api/attempts/{attempt_id}").json()["attempt"]["status"]
         print(f"    … estado: {status}")
     assert status == "finished", f"El examen no llegó a 'finished': {status}"
 
     # 10. Resultados ----------------------------------------------------------
-    results = client.get(f"/api/exams/{attempt_id}/results").json()
+    results = client.get(f"/api/attempts/{attempt_id}/results").json()
     core = results["attempt"]
     print(f"[OK] Nota: {core['score']}/100 | duración: {core.get('duration_sec')}s")
     print(f"    preguntas: {len(results['questions'])} | calificadas: {results['graded_count']}"
@@ -195,7 +199,7 @@ def main() -> int:  # noqa: C901 - script lineal de verificación
         print(f"    tema (materia): {t['topic']} — acierto {t['accuracy']}% ({t['correct']}/{t['answered']})")
 
     # 11. Plan de estudio -----------------------------------------------------
-    r = client.post(f"/api/exams/{attempt_id}/study-plan")
+    r = client.post(f"/api/attempts/{attempt_id}/study-plan")
     if r.status_code == 200:
         plan = r.json()
         content = plan.get("content") or {}
@@ -213,9 +217,18 @@ def main() -> int:  # noqa: C901 - script lineal de verificación
     )
     assert r.status_code == 200, f"Tutor falló: {r.status_code} {r.text}"
     reply = r.json()
-    grounded = reply.get("grounded")
-    print(f"[OK] Tutor respondió (anclada en documentos: {grounded}, fuentes: {len(reply.get('sources') or [])})")
-    print(f"    \"{(reply.get('content') or '')[:180]}…\"")
+    assistant = reply.get("assistant_message") or {}
+    sources = assistant.get("sources") or []
+    print(f"[OK] Tutor respondió (anclada en documentos: {assistant.get('grounded')}, "
+          f"fuentes: {len(sources)}, modo: {reply.get('rag_mode')})")
+    preview = (assistant.get("content") or "").replace("\n", " ")[:200]
+    print(f'    "{preview}…"')
+    for src in sources[:3]:
+        if isinstance(src, dict):
+            where = src.get("document_name") or src.get("document") or "?"
+            if src.get("page"):
+                where += f", pág. {src['page']}"
+            print(f"    fuente: {where}")
 
     # 13. Estadísticas y panel -------------------------------------------------
     stats = client.get(f"/api/subjects/{sid}/stats").json()
