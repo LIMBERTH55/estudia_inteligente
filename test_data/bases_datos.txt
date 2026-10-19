@@ -1,0 +1,11 @@
+﻿Bases de Datos Relacionales - Tema 1
+
+Una base de datos relacional organiza la informacion en tablas formadas por filas y columnas.
+La clave primaria es un campo que identifica de forma unica cada registro de una tabla.
+La clave foranea es un campo que referencia la clave primaria de otra tabla, creando relaciones.
+La normalizacion es el proceso de organizar los datos para reducir la redundancia y evitar anomalias.
+Existen formas normales: 1FN, 2FN y 3FN. La tercera forma normal elimina dependencias transitivas.
+Una transaccion es una secuencia de operaciones que se ejecutan como una unidad atomica: o todas o ninguna.
+Las transacciones cumplen las propiedades ACID: atomicidad, consistencia, aislamiento y durabilidad.
+El lenguaje SQL permite consultar y modificar los datos mediante SELECT, INSERT, UPDATE y DELETE.
+Un indice acelera las busquedas en una tabla a costa de mas espacio de almacenamiento.

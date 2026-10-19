@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Entorno (¡no subir secretos!)
+backend/.env
+
+# Almacenamiento de archivos subidos
+backend/storage/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+npm-debug.log*
+
+# Editores / sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# OpenCode (skills locales)
+.agents/
+skills-lock.json
