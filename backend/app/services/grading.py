@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from ..ai import AINotConfiguredError, get_provider
+from ..ai import get_provider
 from ..ai.prompts import GRADING_SYSTEM, grading_prompt
 from ..ai.schemas import GradeOpenAnswers
 from ..models import AttemptAnswer, ExamAttempt, Question
@@ -183,7 +183,7 @@ def finalize_attempt(db: Session, attempt: ExamAttempt) -> None:
                 if grade.missing_points:
                     feedback += "\n\nPuntos a reforzar: " + "; ".join(grade.missing_points[:5])
                 ans.ai_feedback = feedback
-        except (AINotConfiguredError, Exception) as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning("No se pudieron calificar preguntas abiertas con IA: %s", exc)
             for ans in open_answers.values():
                 ans.is_correct = None
