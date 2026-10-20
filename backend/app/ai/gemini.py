@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TypeVar
+import re
+import time
+from typing import Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -12,12 +14,61 @@ from .provider import AIError, AINotConfiguredError, AIProvider, ImageInput
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
+_TRANSIENT_MARKERS = (
+    "503",
+    "unavailable",
+    "overloaded",
+    "429",
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "deadline",
+    "timeout",
+    "timed out",
+    "500 internal",
+    "internal error",
+    "server error",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    low = str(exc).lower()
+    return any(marker in low for marker in _TRANSIENT_MARKERS)
+
+
+def _with_retries(call: Callable[[], T], *, attempts: int = 4, base_delay: float = 4.0) -> T:
+    """Reintenta llamadas a Gemini ante saturaciones/limitaciones transitorias."""
+    for index in range(attempts):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001
+            if index >= attempts - 1 or not _is_transient(exc):
+                raise
+            delay = base_delay * (2**index)
+            logger.warning(
+                "Error transitorio de Gemini (%s). Reintento %s/%s en %.0fs…",
+                exc,
+                index + 1,
+                attempts - 1,
+                delay,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
 
 def _friendly_error(exc: Exception) -> str:
     text = str(exc)
     low = text.lower()
     if "api key" in low or "api_key" in low or "unauthenticated" in low or "invalid key" in low:
         return "La API key de Gemini no es válida. Revísala en backend/.env (GEMINI_API_KEY)."
+    if "perday" in low or "per day" in low or "per-day" in low:
+        match = re.search(r"retry in ([0-9hms\.]+)", low)
+        when = f" Se renueva en {match.group(1).split('.')[0]}." if match else ""
+        return (
+            "Se agotó la cuota diaria gratuita de Gemini para este modelo."
+            f"{when} Mientras tanto puedes esperar a la renovación, cambiar de modelo en "
+            "GEMINI_MODEL (cada modelo tiene su propia cuota) o activar facturación en Google AI Studio."
+        )
     if "quota" in low or "429" in low or "rate" in low:
         return "Se agotó la cuota de la API de Gemini (límite gratuito o de facturación). Espera unos minutos e inténtalo de nuevo."
     if "not found" in low and "model" in low:
@@ -66,15 +117,17 @@ class GeminiProvider(AIProvider):
     ) -> T:
         types = self._genai_types
         try:
-            resp = self.client.models.generate_content(
-                model=self.model,
-                contents=self._contents(prompt, images),
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=temperature,
-                    response_mime_type="application/json",
-                    response_schema=schema,
-                ),
+            resp = _with_retries(
+                lambda: self.client.models.generate_content(
+                    model=self.model,
+                    contents=self._contents(prompt, images),
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        temperature=temperature,
+                        response_mime_type="application/json",
+                        response_schema=schema,
+                    ),
+                )
             )
         except Exception as exc:  # noqa: BLE001
             raise AIError(_friendly_error(exc)) from exc
@@ -108,13 +161,15 @@ class GeminiProvider(AIProvider):
     ) -> str:
         types = self._genai_types
         try:
-            resp = self.client.models.generate_content(
-                model=self.model,
-                contents=self._contents(prompt, images),
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=temperature,
-                ),
+            resp = _with_retries(
+                lambda: self.client.models.generate_content(
+                    model=self.model,
+                    contents=self._contents(prompt, images),
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        temperature=temperature,
+                    ),
+                )
             )
         except Exception as exc:  # noqa: BLE001
             raise AIError(_friendly_error(exc)) from exc
@@ -138,10 +193,12 @@ class GeminiProvider(AIProvider):
         for i in range(0, len(texts), batch):
             chunk = texts[i : i + batch]
             try:
-                resp = self.client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=chunk,
-                    config=types.EmbedContentConfig(task_type=task_type),
+                resp = _with_retries(
+                    lambda: self.client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=chunk,
+                        config=types.EmbedContentConfig(task_type=task_type),
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 raise AIError(_friendly_error(exc)) from exc

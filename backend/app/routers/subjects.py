@@ -168,7 +168,9 @@ def reanalyze_subject(
             subject_row = job_db.get(Subject, subject_id)
             if subject_row is None:
                 return
-            recompute_importance(job_db, subject_row)
+            # Recalcular nunca debe borrar temas: la limpieza solo ocurre al
+            # quedarse la asignatura sin documentos.
+            recompute_importance(job_db, subject_row, prune=False)
             try:
                 regenerate_subject_summary(job_db, subject_row)
             except Exception:  # noqa: BLE001

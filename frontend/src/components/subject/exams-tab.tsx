@@ -276,6 +276,11 @@ export function ExamsTab({ subject }: { subject: Subject }) {
           <Alert tone="amber" title="Primero necesitas documentos analizados">
             Ve a la pestaña «Documentos», sube tu material y espera a que el análisis con IA termine.
           </Alert>
+        ) : subject.topics_count === 0 ? (
+          <Alert tone="amber" title="El análisis no generó temas utilizables">
+            El documento se procesó, pero no se detectaron temas. Ve a «Documentos» y pulsa el botón
+            de recarga junto al documento para volver a analizarlo.
+          </Alert>
         ) : (
           <>
             <div className="grid gap-5 lg:grid-cols-2">

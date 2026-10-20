@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..ai import AIError, AINotConfiguredError, get_provider
@@ -55,12 +56,27 @@ def _refresh_subject_status(db: Session, subject: Subject) -> None:
         subject.analysis_status = "pending"
 
 
-def recompute_importance(db: Session, subject: Subject, *, prune: bool = True) -> None:
-    """Recalcula señales e importancia de todos los temas de la asignatura."""
+def recompute_importance(
+    db: Session,
+    subject: Subject,
+    *,
+    prune: bool = True,
+    include_doc_ids: set[str] | None = None,
+) -> None:
+    """Recalcula señales e importancia de todos los temas de la asignatura.
+
+    ``include_doc_ids`` permite contar los fragmentos de documentos que todavía
+    están en estado ``processing`` (el que se acaba de analizar), que de otro
+    modo quedarían fuera de la consulta y harían parecer que el material está vacío.
+    """
+    include_doc_ids = include_doc_ids or set()
+    status_filter = Document.status == "ready"
+    if include_doc_ids:
+        status_filter = or_(status_filter, Document.id.in_(include_doc_ids))
     chunk_rows = (
         db.query(DocumentChunk, Document)
         .join(Document, DocumentChunk.document_id == Document.id)
-        .filter(DocumentChunk.subject_id == subject.id, Document.status == "ready")
+        .filter(DocumentChunk.subject_id == subject.id, status_filter)
         .all()
     )
     chunks = [(c, d) for c, d in chunk_rows]
@@ -75,12 +91,8 @@ def recompute_importance(db: Session, subject: Subject, *, prune: bool = True) -
 
     max_mentions = max((s.mentions for s in signals_by_topic.values()), default=0)
 
-    to_prune: list[Topic] = []
     for topic in topics:
         signals = signals_by_topic[topic.id]
-        if prune and signals.mentions == 0:
-            to_prune.append(topic)
-            continue
         importance, factors, reasons = importance_from_signals(
             signals,
             llm_hint=topic.llm_hint,
@@ -93,8 +105,12 @@ def recompute_importance(db: Session, subject: Subject, *, prune: bool = True) -
         topic.mention_count = signals.mentions
         topic.document_ids = sorted(signals.doc_ids)
 
-    for topic in to_prune:
-        db.delete(topic)
+    # Nunca se elimina un tema por tener 0 coincidencias textuales: la IA pudo
+    # redactarlo con sinónimos válidos del material. Solo se limpia el temario
+    # cuando la asignatura se quedó sin documentos listos.
+    if prune and not chunks:
+        for topic in topics:
+            db.delete(topic)
     db.commit()
 
 
@@ -188,12 +204,22 @@ def _merge_topics_with_llm(db: Session, subject: Subject, new_topics: list[Extra
     db.commit()
 
 
-def regenerate_subject_summary(db: Session, subject: Subject) -> None:
-    """Genera (o regenera) la guía de estudio de la asignatura si hay documentos listos."""
+def regenerate_subject_summary(
+    db: Session, subject: Subject, *, include_doc_ids: set[str] | None = None
+) -> None:
+    """Genera (o regenera) la guía de estudio de la asignatura si hay documentos listos.
+
+    ``include_doc_ids`` incluye documentos en estado ``processing`` (el que se
+    acaba de analizar), igual que en ``recompute_importance``.
+    """
     provider = get_provider()
+    include_doc_ids = include_doc_ids or set()
+    status_filter = Document.status == "ready"
+    if include_doc_ids:
+        status_filter = or_(status_filter, Document.id.in_(include_doc_ids))
     docs = (
         db.query(Document)
-        .filter(Document.subject_id == subject.id, Document.status == "ready")
+        .filter(Document.subject_id == subject.id, status_filter)
         .all()
     )
     if not docs:
@@ -314,11 +340,11 @@ def process_document(document_id: str) -> None:
         _merge_topics_with_llm(db, subject, analysis.topics)
 
         _update(db, doc, "Calculando relevancia de los temas", 90)
-        recompute_importance(db, subject)
+        recompute_importance(db, subject, include_doc_ids={doc.id})
 
         _update(db, doc, "Actualizando la guía de estudio", 95)
         try:
-            regenerate_subject_summary(db, subject)
+            regenerate_subject_summary(db, subject, include_doc_ids={doc.id})
         except (AIError, AINotConfiguredError) as exc:
             logger.warning("No se pudo regenerar la guía de la asignatura: %s", exc)
 
@@ -335,9 +361,21 @@ def process_document(document_id: str) -> None:
 
     except (AINotConfiguredError, AIError) as exc:
         if doc is not None:
-            doc.status = "error"
-            doc.error = str(exc)
-            doc.stage = "Error de IA durante el análisis"
+            # Si el documento ya tenía un análisis válido (p. ej. al pulsar
+            # «Volver a analizar»), se conserva para no dejar la materia
+            # inutilizable por una caída puntual de la IA.
+            had_analysis = bool(doc.ai_summary) and (
+                db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).count() > 0
+            )
+            if had_analysis:
+                doc.status = "ready"
+                doc.progress = 100
+                doc.error = None
+                doc.stage = "Análisis anterior conservado: falló el reprocesamiento con IA"
+            else:
+                doc.status = "error"
+                doc.error = str(exc)
+                doc.stage = "Error de IA durante el análisis"
             if doc.subject_id:
                 subject = db.get(Subject, doc.subject_id)
                 if subject:

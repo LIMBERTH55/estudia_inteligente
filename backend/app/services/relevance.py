@@ -50,6 +50,19 @@ class TopicSignals:
     exam_hits: int = 0
 
 
+_STOPWORDS = {
+    "para", "como", "sobre", "entre", "desde", "hasta", "donde", "cuando",
+    "este", "esta", "estos", "estas", "otro", "otra", "otros", "otras",
+    "unos", "unas", "del", "las", "los", "una", "con", "por", "que", "sus",
+}
+
+
+def _significant_words(text: str) -> list[str]:
+    """Palabras con contenido del nombre de un tema (para coincidencias tolerantes)."""
+    words = re.findall(r"[a-z0-9]+", normalize(text))
+    return [w for w in words if len(w) >= 4 and w not in _STOPWORDS]
+
+
 def _topic_matches_chunk(topic_name: str, keywords: list[str], content_norm: str) -> bool:
     name_norm = normalize(topic_name)
     if len(name_norm) >= 4 and name_norm in content_norm:
@@ -57,6 +70,13 @@ def _topic_matches_chunk(topic_name: str, keywords: list[str], content_norm: str
     # Si el nombre es una sola palabra, exigir palabra completa
     if " " not in name_norm and re.search(rf"\b{re.escape(name_norm)}\b", content_norm):
         return True
+    # El nombre puede estar redactado con sinónimos: basta con que aparezca la
+    # mayoría de sus palabras significativas para considerar que trata el tema.
+    words = _significant_words(topic_name)
+    if words:
+        present = sum(1 for w in words if re.search(rf"\b{re.escape(w)}\b", content_norm))
+        if present >= max(2, math.ceil(len(words) * 0.6)):
+            return True
     hits = sum(1 for kw in keywords if len(kw) >= 4 and normalize(kw) in content_norm)
     return hits >= 2
 

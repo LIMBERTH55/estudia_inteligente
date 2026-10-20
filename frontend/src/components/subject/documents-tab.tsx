@@ -268,13 +268,22 @@ export function DocumentsTab({ subject }: { subject: Subject }) {
                   <div className="flex items-center gap-2">
                     <StatusBadge doc={doc} />
                     {doc.status === "ready" && (
-                      <a
-                        href={`/api/documents/${doc.id}/file`}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-violet-600 dark:hover:bg-slate-800"
-                        title="Descargar"
-                      >
-                        <Download className="h-4 w-4" />
-                      </a>
+                      <>
+                        <a
+                          href={`/api/documents/${doc.id}/file`}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-violet-600 dark:hover:bg-slate-800"
+                          title="Descargar"
+                        >
+                          <Download className="h-4 w-4" />
+                        </a>
+                        <button
+                          onClick={() => reprocess.mutate(doc.id)}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-violet-600 dark:hover:bg-slate-800"
+                          title="Volver a analizar"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </button>
+                      </>
                     )}
                     {doc.status === "error" && (
                       <Button
